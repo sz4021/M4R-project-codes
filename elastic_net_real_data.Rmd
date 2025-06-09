@@ -1,0 +1,314 @@
+---
+title: "real data elastic net"
+output: html_document
+date: "2025-04-30"
+---
+
+```{r setup, include=FALSE}
+library(glmnet)   
+library(Matrix)   
+library(caret)    
+library(dplyr)    
+library(grpreg)
+library(MASS)  
+library(SGL)
+library(sgs)
+library(dfr)
+library(cluster)
+library(ggplot2)  
+library(tidyr)  
+library(RcppML)
+library(splines)  
+```
+
+
+```{r}
+# 定义 Elastic Net 拟合函数  
+fit_elastic_net <- function(X, y, alpha_value = 0.5) {  
+  # 拟合 Elastic Net 模型  
+  fit <- cv.glmnet(  
+    x = as.matrix(X),  # 将数据转为矩阵  
+    y = y,  
+    alpha = alpha_value,  
+    nfolds = 10,              # 使用 5 折交叉验证  
+    standardize = FALSE       # 标准化特征  
+  )  
+  
+  # 找到最佳的 lambda  
+  best_lambda <- fit$lambda.min  
+  
+  # 进行最终模型拟合  
+  final_model <- glmnet(  
+    x = as.matrix(X),  
+    y = y,  
+    alpha = alpha_value,  
+    lambda = best_lambda  
+  )  
+  
+  # 提取回归系数  
+  beta_hat <- coef(final_model)  
+  
+  # 计算均方误差 (MSE)  
+  y_pred <- as.matrix(X) %*% as.numeric(beta_hat[-1])  # 排除截距项  
+  mse_y <- mean((y - y_pred)^2)  
+  mse_y <- format(mse_y, nsmall = 15)
+  
+  # 选择的特征数量（非零系数的数量）  
+  num_selected_features <- sum(beta_hat[-1] != 0)  
+
+  # 返回结果  
+  return(list(mse_y = mse_y, num_selected_features = num_selected_features))  
+}  
+```
+
+
+
+
+
+```{r}
+brca1 <- readRDS("/Users/zhou/Desktop/IC大四/M4R/M4R copy/real data/brca1.rds")
+
+X_brca1 <- brca1$X
+y_brca1 <- brca1$y
+```
+
+
+```{r}
+# 示例使用：  
+brca1_elastic <- fit_elastic_net(X_brca1, y_brca1)  
+print(brca1_elastic)
+```
+
+alpha = 0.5
+
+$mse_y
+[1] "0.163610269788769"
+
+$num_selected_features
+[1] 368
+
+
+alpha = 0.95
+
+$mse_y
+[1] "0.217294159566147"
+
+$num_selected_features
+[1] 257
+
+
+
+```{r}
+scheetz <- readRDS("/Users/zhou/Desktop/IC大四/M4R/M4R copy/real data/scheetz.rds")
+
+X_scheetz <- scheetz$X
+y_scheetz <- scheetz$y
+
+# 示例使用：  
+scheetz_elastic <- fit_elastic_net(X_scheetz, y_scheetz)  
+print(scheetz_elastic)
+```
+alpha = 0.5:
+
+$mse_y
+[1] "55.350403310157027"
+
+$num_selected_features
+[1] 121
+
+alpha = 0.95
+
+$mse_y
+[1] "47.086132097412303"
+
+$num_selected_features
+[1] 100
+
+
+
+
+
+
+
+
+Histogram plotting
+
+
+
+```{r}
+
+
+# Define the clustering and histogram plotting function  
+perform_clustering_and_plot <- function(matrix_data, optimal_k, nmf_dim) {  
+  
+  # 1. SVD  
+  # SVD decomposition  
+  svd_result <- svd(matrix_data)  
+  # Grouping using the first singular vector  
+  grp_svd <- apply(svd_result$v, 1, function(x) which.max(x * svd_result$d))  
+  # Count the number of features in each group  
+  grp_svd_counts <- table(grp_svd)  
+  svd_unique_groups <- length(unique(grp_svd)) 
+  
+  svd_group_sizes <- sort(grp_svd_counts, decreasing = TRUE)  
+  cat("SVD Group Counts:\n")  
+  cat("Largest Group:", svd_group_sizes[1], "\n")  
+  cat("Second Largest Group:", svd_group_sizes[2], "\n\n")  
+    
+  # 2. QR  
+  qr_dec <- qr(matrix_data)  
+  R <- qr.R(qr_dec)  
+  # Grouping based on QR factors  
+  grp_qr <- apply(R, 2, which.max)  # Assign groups based on max value in each column  
+  # Count the number of features in each group  
+  grp_qr_counts <- table(grp_qr)   
+  qr_unique_groups <- length(unique(grp_qr))  
+  
+  qr_group_sizes <- sort(grp_qr_counts, decreasing = TRUE)  
+  cat("QR Group Counts:\n")  
+  cat("Largest Group:", qr_group_sizes[1], "\n")  
+  cat("Second Largest Group:", qr_group_sizes[2], "\n") 
+    
+  # 3. K-means Clustering  
+  set.seed(123)  # For reproducibility  
+  kmeans_result <- kmeans(t(matrix_data), centers = optimal_k)  
+  kmeans_group_counts <- table(kmeans_result$cluster)  
+  kmeans_unique_groups <- length(unique(kmeans_result$cluster))  
+  
+  # 4. NMF  
+  nmf_result <- RcppML::nmf(matrix_data, k = nmf_dim, maxit = 5000)  
+  grp_nmf <- apply(nmf_result$h, 2, which.max)  
+  grp_nmf_counts <- table(grp_nmf)  
+  nmf_unique_groups <- length(unique(grp_nmf))  
+  
+  # Function to plot histograms  
+  # Function to plot histograms  
+  plot_histogram <- function(group_counts, method_name) {  
+      df <- as.data.frame(group_counts)  
+      colnames(df) <- c("Group", "Count")  
+      df$Group <- as.factor(df$Group)  
+      
+      p <- ggplot(df, aes(x = Group, y = Count)) +  
+        geom_bar(stat = "identity", fill = "lightblue") +  
+        labs(title = paste("Histogram of Features in Groups (", method_name, ")", sep=""),  
+             y = "Number of Features") +  
+        theme_minimal() +  
+        theme(axis.text.x = element_blank(),  # Remove x-axis labels  
+              axis.ticks.x = element_blank())  # Optionally remove x-axis ticks too  
+      
+      print(p)  # Print the histogram  
+  } 
+  
+  # Plot histograms for each clustering method  
+  plot_histogram(grp_svd_counts, "SVD")  
+  plot_histogram(grp_qr_counts, "QR")  
+  plot_histogram(kmeans_group_counts, "K-means")  
+  plot_histogram(grp_nmf_counts, "NMF")  
+  
+  # Return the counts of unique groups for each method  
+  return(list(  
+    SVD_groups = svd_unique_groups,  
+    QR_groups = qr_unique_groups,  
+    KMeans_groups = kmeans_unique_groups,  
+    NMF_groups = nmf_unique_groups  
+  ))  
+}  
+
+```
+
+
+brca1 histogram
+
+```{r}
+result <- perform_clustering_and_plot(X_brca1, optimal_k = 2, nmf_dim = 3)  
+
+result
+```
+
+
+
+
+
+
+
+scheetz histogram 
+
+```{r}
+result <- perform_clustering_and_plot(X_scheetz, optimal_k = 3, nmf_dim = 3)  
+
+result
+```
+
+
+
+Trust experts
+
+```{r}
+load("/Users/zhou/Desktop/IC大四/M4R/M4R copy/real data/trust_experts.rda")
+
+# 查看对象类型  
+class(trust_experts)  
+
+# 查看对象结构  
+str(trust_experts) 
+
+print(dim(trust_experts))
+```
+
+
+```{r}
+library(splines)  
+library(dplyr)  
+library(magrittr)  
+
+df <- 10  
+
+trust_experts <- trust_experts %>%  
+  mutate(across(  
+    where(is.factor),  
+    ~ set_attr(.x, "contrasts", contr.sum(nlevels(.x), FALSE, TRUE))  
+  ))  
+
+X_trust <- Matrix::sparse.model.matrix(  
+  ~ 0 + region + age + gender + raceethnicity + period +  
+    bs(cli, df = df) + bs(hh_cmnty_cli, df = df),  
+  data = trust_experts, drop.unused.levels = TRUE  
+)  
+
+gr <- sapply(trust_experts, function(X_trust) ifelse(is.factor(X_trust), nlevels(X_trust), NA))  
+gr <- rep(seq(ncol(trust_experts) - 1), times = c(gr[!is.na(gr)], df, df))  
+
+# 转换为标准矩阵  
+X_trust <- as.matrix(X_trust)  
+
+print(dim(X_trust))
+```
+
+```{r}
+result <- perform_clustering_and_plot(X_trust, optimal_k = 22, nmf_dim = 2)  
+
+result
+```
+
+```{r}
+# 示例使用：  
+scheetz_elastic <- fit_elastic_net(X_trust, trust_experts$trust_experts)  
+print(scheetz_elastic)
+```
+
+alpha = 0.95
+
+$mse_y
+[1] "2635.863646227674508"
+
+$num_selected_features
+[1] 101
+
+
+alpha = 0.5
+
+$mse_y
+[1] "2634.512049654031671"
+
+$num_selected_features
+[1] 101
